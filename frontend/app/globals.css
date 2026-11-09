@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * CloudPilot design tokens.
+ * Warm-neutral surfaces, an ink primary, and a single deep-teal brand accent.
+ * Amber is reserved for spend increases / anomalies, red for high risk.
+ */
+@layer base {
+  :root {
+    --background: 40 23% 97%;
+    --foreground: 224 24% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 24% 12%;
+    --muted: 40 14% 93.5%;
+    --muted-foreground: 222 9% 42%;
+    --secondary: 40 14% 94.5%;
+    --secondary-foreground: 224 20% 20%;
+    --border: 36 12% 88%;
+    --input: 36 12% 84%;
+    --ring: 166 72% 28%;
+    --primary: 224 36% 14%;
+    --primary-foreground: 40 23% 97%;
+    --brand: 166 72% 28%;
+    --brand-foreground: 0 0% 100%;
+    --brand-soft: 160 45% 93%;
+    --warning: 30 82% 38%;
+    --warning-soft: 38 92% 94%;
+    --danger: 0 62% 45%;
+    --danger-soft: 0 80% 96%;
+    --sidebar: 224 30% 9%;
+    --sidebar-foreground: 40 15% 93%;
+    --sidebar-muted: 222 12% 63%;
+    --sidebar-border: 224 20% 16%;
+    --sidebar-accent: 224 22% 15%;
+    --radius: 14px;
+    color-scheme: light;
+  }
+
+  .dark {
+    --background: 224 26% 6%;
+    --foreground: 40 18% 94%;
+    --card: 224 22% 9%;
+    --card-foreground: 40 18% 94%;
+    --muted: 224 16% 13.5%;
+    --muted-foreground: 222 10% 64%;
+    --secondary: 224 16% 14%;
+    --secondary-foreground: 40 18% 90%;
+    --border: 224 14% 17%;
+    --input: 224 14% 22%;
+    --ring: 162 52% 50%;
+    --primary: 40 18% 94%;
+    --primary-foreground: 224 26% 8%;
+    --brand: 162 52% 50%;
+    --brand-foreground: 224 30% 7%;
+    --brand-soft: 164 40% 13%;
+    --warning: 36 85% 62%;
+    --warning-soft: 32 50% 12%;
+    --danger: 0 75% 67%;
+    --danger-soft: 0 40% 13%;
+    --sidebar: 224 28% 5%;
+    --sidebar-border: 224 18% 12%;
+    --sidebar-accent: 224 20% 11%;
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
+  body {
+    @apply bg-background font-sans text-[14px] text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  ::selection {
+    background: hsl(var(--brand) / 0.18);
+  }
+}
+
+@layer utilities {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Thin, unobtrusive scrollbars for inner scroll areas */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+}
+
+/* CloudPilot AI assistant: rotating gradient edge and glow */
+@property --ai-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.ai-glow-gradient {
+  background: conic-gradient(from var(--ai-angle), #1fb98f, #3e63dd, #8b5cf6, #ec4899, #f59e0b, #1fb98f);
+  animation: ai-spin 6s linear infinite;
+}
+
+.ai-avatar {
+  background: linear-gradient(135deg, #1f9d84 0%, #3e63dd 55%, #8b5cf6 100%);
+  box-shadow: 0 4px 14px -4px rgb(62 99 221 / 0.55);
+}
+
+@keyframes ai-spin {
+  to {
+    --ai-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-glow-gradient {
+    animation: none;
+  }
+}
+
+/* Recharts: remove the default focus outline on the SVG wrapper */
+.recharts-wrapper:focus,
+.recharts-surface:focus {
+  outline: none;
+}

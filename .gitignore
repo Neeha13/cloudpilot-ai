@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Build output and caches
+.next/
+out/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.tsbuildinfo
+coverage/
+*.log
+
+# Environment files and credentials (examples are safe to commit)
+.env
+.env.*
+!.env.example
+!.env.local.example
+*.pem
+*.key
+
+# SQLite databases, side files and backups
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backups/
+
+.DS_Store
