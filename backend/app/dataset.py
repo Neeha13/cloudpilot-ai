@@ -1,20 +1,23 @@
-"""Single source of truth for the synthetic demo dataset.
+"""Synthetic demo dataset: generation and validation.
 
-Every API (dashboard, anomalies, recommendations, copilot) reads the same
-snapshot so that figures can never disagree between screens. The snapshot is
-built once per process and identified by a content hash (``dataset_id``), which
-recommendation events and copilot answers reference.
+This module only *builds* datasets. Persistence, activation and reads live in
+``snapshots.py``: every API reads the single active snapshot stored in SQLite,
+so figures can never disagree between screens or change silently on restart.
+
+Identifiers:
+- ``dataset_id``  content hash of the data. Identical data -> identical id.
+- ``snapshot_id`` one persisted, activated version (assigned in snapshots.py).
 """
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import random
 from datetime import date, datetime, timezone
-from functools import lru_cache
+import math
 
 SEED = 17
+GENERATOR_VERSION = "1.0.0"
 
 SCENARIO = {
     "id": "ec2-cost-spike",
@@ -37,8 +40,8 @@ def _month_start(ref: date, months_back: int) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
-def _build_spend(ref: date) -> list[dict]:
-    rng = random.Random(SEED)
+def _build_spend(ref: date, seed: int = SEED) -> list[dict]:
+    rng = random.Random(seed)
     rows = []
     for months_back in range(HISTORY_MONTHS - 1, -1, -1):
         month = _month_start(ref, months_back).strftime("%Y-%m")
@@ -107,36 +110,99 @@ def _build_resources() -> list[dict]:
     ]
 
 
-@lru_cache(maxsize=1)
-def _snapshot() -> dict:
-    ref = date.today()
-    spend = _build_spend(ref)
+def content_hash(seed: int, spend: list[dict], resources: list[dict], scenario_id: str = SCENARIO["id"]) -> str:
+    # Same payload as before Sprint 1, so the default dataset keeps its existing dataset_id.
+    payload = {"seed": seed, "scenario": scenario_id, "spend": spend, "resources": resources}
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:10]
+    return f"ds-{digest}"
+
+
+def build_dataset(reference_date: date | None = None, seed: int = SEED) -> dict:
+    """Generate a complete dataset for the billing month containing ``reference_date``.
+
+    Pure and deterministic: the same reference month and seed always produce the
+    same data and therefore the same ``dataset_id``.
+    """
+    ref = reference_date or date.today()
+    spend = _build_spend(ref, seed)
     resources = _build_resources()
     months = sorted({row["month"] for row in spend})
-    digest = hashlib.sha256(
-        json.dumps({"seed": SEED, "scenario": SCENARIO["id"], "spend": spend, "resources": resources},
-                   sort_keys=True).encode()
-    ).hexdigest()[:10]
     return {
-        "dataset_id": f"ds-{digest}",
+        "dataset_id": content_hash(seed, spend, resources),
+        "seed": seed,
+        "generator_version": GENERATOR_VERSION,
+        "reference_date": ref.isoformat(),
         "scenario": SCENARIO,
         "data_source": "synthetic_demo",
         "data_source_label": "Synthetic demo data",
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "billing_period": {"start": months[0], "end": months[-1], "current": months[-1]},
         "spend": spend,
         "resources": resources,
     }
 
 
-def get_dataset() -> dict:
-    """A deep copy of the shared snapshot, so callers can never mutate it."""
-    return copy.deepcopy(_snapshot())
+class DatasetValidationError(ValueError):
+    def __init__(self, errors: list[str]):
+        super().__init__("; ".join(errors))
+        self.errors = errors
 
 
-def dataset_meta() -> dict:
-    snap = _snapshot()
-    return {k: v for k, v in snap.items() if k not in ("spend", "resources")} | {
-        "resource_count": len(snap["resources"]),
-        "spend_rows": len(snap["spend"]),
-    }
+def validate_dataset(ds: dict) -> list[str]:
+    """Integrity rules a dataset must pass before it can become a snapshot."""
+    errors: list[str] = []
+    spend, resources = ds.get("spend") or [], ds.get("resources") or []
+    if not spend:
+        return ["dataset has no billing records"]
+    months = sorted({r.get("month") for r in spend})
+    try:
+        ref = date.fromisoformat(ds["reference_date"])
+        expected = [_month_start(ref, b).strftime("%Y-%m") for b in range(HISTORY_MONTHS - 1, -1, -1)]
+        if months != expected:
+            errors.append(f"billing months {months} are not the {HISTORY_MONTHS} consecutive months ending {expected[-1]}")
+    except (KeyError, TypeError, ValueError):
+        errors.append("reference_date is missing or invalid")
+    seen = set()
+    for r in spend:
+        key = (r.get("month"), r.get("service"))
+        if key in seen:
+            errors.append(f"duplicate billing record {key}")
+        seen.add(key)
+        cost = r.get("cost")
+        if r.get("service") not in SERVICES:
+            errors.append(f"unknown service {r.get('service')!r}")
+        if not isinstance(cost, (int, float)) or isinstance(cost, bool) or not math.isfinite(cost) or cost < 0:
+            errors.append(f"invalid cost {cost!r} for {key}")
+    for m in months:
+        missing = set(SERVICES) - {r["service"] for r in spend if r.get("month") == m}
+        if missing:
+            errors.append(f"{m} is missing services {sorted(missing)}")
+    bp = ds.get("billing_period") or {}
+    if months and (bp.get("start"), bp.get("end"), bp.get("current")) != (months[0], months[-1], months[-1]):
+        errors.append("billing_period does not match the billing records")
+    if not resources:
+        errors.append("dataset has no resources")
+    ids = [r.get("id") for r in resources]
+    if len(ids) != len(set(ids)) or not all(ids):
+        errors.append("resource ids must be present and unique")
+    for r in resources:
+        if r.get("service") not in SERVICES:
+            errors.append(f"resource {r.get('id')} has unknown service {r.get('service')!r}")
+        mc = r.get("monthly_cost")
+        if not isinstance(mc, (int, float)) or not math.isfinite(mc) or mc < 0:
+            errors.append(f"resource {r.get('id')} has invalid monthly_cost {mc!r}")
+        if not isinstance(r.get("metrics"), dict):
+            errors.append(f"resource {r.get('id')} has no metrics object")
+    if not errors and ds.get("dataset_id") != content_hash(ds.get("seed", SEED), spend, resources, (ds.get("scenario") or {}).get("id", SCENARIO["id"])):
+        errors.append("dataset_id does not match the dataset content")
+    return errors
+
+
+def get_dataset(snapshot_id: str | None = None) -> dict:
+    """A deep copy of the active (or a specific) persisted snapshot."""
+    from .snapshots import load_dataset
+    return load_dataset(snapshot_id)
+
+
+def dataset_meta(snapshot_id: str | None = None) -> dict:
+    from .snapshots import snapshot_meta
+    return snapshot_meta(snapshot_id)

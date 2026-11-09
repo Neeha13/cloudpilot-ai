@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, RefreshCw, ServerCrash, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, Info, RefreshCw, ServerCrash, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -67,7 +67,15 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry: () 
   );
 }
 
-export function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+export type ToastTone = "error" | "success" | "info";
+
+const TONE_ICON = {
+  error: <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />,
+  success: <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-brand" />,
+  info: <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />,
+};
+
+export function Toast({ message, onClose, tone = "error" }: { message: string; onClose: () => void; tone?: ToastTone }) {
   useEffect(() => {
     if (!message) return;
     const t = setTimeout(onClose, 6000);
@@ -79,13 +87,13 @@ export function Toast({ message, onClose }: { message: string; onClose: () => vo
       <AnimatePresence>
         {message && (
           <motion.div
-            role="alert"
+            role={tone === "error" ? "alert" : "status"}
             initial={{ opacity: 0, y: 16, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8 }}
             className="pointer-events-auto flex max-w-sm items-start gap-3 rounded-xl border bg-card p-4 shadow-lift"
           >
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+            {TONE_ICON[tone]}
             <p className="text-[13px] leading-relaxed">{message}</p>
             <button onClick={onClose} aria-label="Dismiss" className="rounded text-muted-foreground hover:text-foreground">
               <X className="h-4 w-4" />

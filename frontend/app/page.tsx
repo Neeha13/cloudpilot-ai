@@ -5,26 +5,32 @@ import { RefreshCw, ShieldCheck } from "lucide-react";
 import {
   actOnAnomaly,
   actOnRecommendation,
+  fetchActiveDashboard,
   fetchAnomalyHistory,
-  fetchDashboard,
+  fetchDatasetMeta,
   fetchRecommendations,
+  fetchRefreshHistory,
+  pinSnapshot,
+  refreshDataset,
   type ActionPayload,
   type Anomaly,
   type AnomalySummary,
   type Dashboard,
+  type DatasetMeta,
   type Recommendation,
+  type RefreshRun,
 } from "@/lib/api";
 import { useScrollSpy } from "@/lib/hooks";
 import { cn, monthLabel } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AnomaliesPanel, type OnAnomalyAction } from "@/components/dashboard/anomalies";
 import { CopilotWidget, type CopilotHandle } from "@/components/dashboard/copilot";
+import { DataFreshness } from "@/components/dashboard/freshness";
 import { Reveal } from "@/components/dashboard/motion";
 import { HeroSpend, ServiceBreakdown, SpendTrend, StatStack, useServiceSlices } from "@/components/dashboard/overview";
 import { RecommendationsSection } from "@/components/dashboard/recommendations";
 import { MobileNav, SECTIONS, Sidebar, ThemeToggle, type ApiStatus } from "@/components/dashboard/shell";
-import { DashboardSkeleton, ErrorState, Toast } from "@/components/dashboard/states";
+import { DashboardSkeleton, ErrorState, Toast, type ToastTone } from "@/components/dashboard/states";
 
 const SECTION_IDS = SECTIONS.map((s) => s.id);
 
@@ -36,23 +42,52 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const [toastTone, setToastTone] = useState<ToastTone>("error");
+  const [meta, setMeta] = useState<DatasetMeta | null>(null);
+  const [runs, setRuns] = useState<RefreshRun[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const copilot = useRef<CopilotHandle>(null);
+
+  const notify = useCallback((message: string, tone: ToastTone = "error") => {
+    setToastTone(tone);
+    setToast(message);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [d, r, a] = await Promise.all([fetchDashboard(), fetchRecommendations(), fetchAnomalyHistory()]);
-      // Guard against an older backend still running: its responses lack the v2 fields this UI renders.
-      if (!d.dataset_id || r.some((x) => !x.savings || !x.priority?.factors) || !Array.isArray(a?.anomalies)) {
-        setError("The API on port 8000 is an older version. Stop it and restart the backend (uvicorn app.main:app --reload), then try again.");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        // 1. The active snapshot decides what this screen shows; 2. everything else is pinned to it.
+        const { dashboard: d, snapshotId } = await fetchActiveDashboard();
+        pinSnapshot(snapshotId);
+        const [r, a, m, history] = await Promise.all([
+          fetchRecommendations(),
+          fetchAnomalyHistory(),
+          fetchDatasetMeta(),
+          fetchRefreshHistory(),
+        ]);
+        // Guard against an older backend still running: its responses lack the fields this UI renders.
+        if (!d.dataset_id || !snapshotId || r.some((x) => !x.savings || !x.priority?.factors) || !Array.isArray(a?.anomalies)) {
+          setError("The API on port 8000 is an older version. Stop it and restart the backend (uvicorn app.main:app --reload), then try again.");
+          return;
+        }
+        // Defensive cross-check: every response must come from the same snapshot.
+        const served = new Set([snapshotId, m.snapshot_id, a.snapshot_id ?? snapshotId, ...r.map((x) => x.snapshot_id ?? snapshotId)]);
+        if (served.size !== 1) {
+          if (attempt === 0) continue;
+          setError("The data changed while it was loading. Please try again.");
+          return;
+        }
+        setDash(d);
+        setRecs(r);
+        setAnoms(a.anomalies);
+        setAnomSummary(a.summary);
+        setMeta(m);
+        setRuns(history);
         return;
       }
-      setDash(d);
-      setRecs(r);
-      setAnoms(a.anomalies);
-      setAnomSummary(a.summary);
     } catch {
       setError("Start the FastAPI backend on port 8000, then try again.");
     } finally {
@@ -78,12 +113,12 @@ export default function Home() {
       return true;
     } catch (e) {
       const detail = e instanceof Error && !e.message.startsWith("Failed to fetch") ? ` ${e.message}.` : "";
-      setToast(`Could not update the recommendation.${detail} Check that the backend is running and try again.`);
+      notify(`Could not update the recommendation.${detail} Check that the backend is running and try again.`);
       return false;
     } finally {
       setPending((p) => ({ ...p, [id]: false }));
     }
-  }, []);
+  }, [notify]);
 
   const actAnomaly: OnAnomalyAction = useCallback(async (id, payload) => {
     setPending((p) => ({ ...p, [id]: true }));
@@ -96,12 +131,29 @@ export default function Home() {
       return updated;
     } catch (e) {
       const detail = e instanceof Error && !e.message.startsWith("Failed to fetch") ? ` ${e.message}.` : "";
-      setToast(`Could not update the anomaly.${detail} Check that the backend is running and try again.`);
+      notify(`Could not update the anomaly.${detail} Check that the backend is running and try again.`);
       return null;
     } finally {
       setPending((p) => ({ ...p, [id]: false }));
     }
-  }, []);
+  }, [notify]);
+
+  /** Controlled refresh: the server validates and atomically activates a new snapshot, then the page reloads from it. */
+  const runRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await refreshDataset();
+      await load();
+      if (res.status === "created") notify(`New data snapshot loaded (${res.snapshot.snapshot_id}). Every figure now uses it.`, "success");
+      else notify("Data is already up to date. The current snapshot was kept.", "info");
+    } catch (e) {
+      const detail = e instanceof Error && !e.message.startsWith("Failed to fetch") ? ` ${e.message}` : " Check that the backend is running.";
+      notify(`Refresh did not complete.${detail} The page still shows the previous snapshot.`);
+      fetchRefreshHistory().then(setRuns).catch(() => {});
+    } finally {
+      setRefreshing(false);
+    }
+  }, [load, notify]);
 
   const activeAnomalies = anoms.filter((a) => a.is_current && a.status !== "resolved").length;
 
@@ -135,16 +187,11 @@ export default function Home() {
               <p className="mt-2 text-[13.5px] text-muted-foreground">Understand spend. Find opportunities. Make informed decisions.</p>
             </div>
             <div className="flex items-center gap-2">
-              {dash && (
-                <Badge variant="outline" className="hidden h-9 rounded-lg px-3 text-[12px] sm:inline-flex">
-                  <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-                  {dash.data_mode}
-                </Badge>
-              )}
+              {dash && !error && <DataFreshness meta={meta} runs={runs} refreshing={refreshing} />}
               <ThemeToggle />
-              <Button variant="outline" onClick={load} disabled={loading}>
-                <RefreshCw className={cn(loading && "animate-spin")} />
-                {loading && dash ? "Refreshing…" : "Refresh data"}
+              <Button variant="outline" onClick={dash && !error ? runRefresh : load} disabled={loading || refreshing}>
+                <RefreshCw className={cn((loading || refreshing) && "animate-spin")} />
+                {refreshing || (loading && dash) ? "Refreshing…" : "Refresh data"}
               </Button>
             </div>
           </header>
@@ -178,7 +225,7 @@ export default function Home() {
       </div>
 
       <CopilotWidget ref={copilot} />
-      <Toast message={toast} onClose={clearToast} />
+      <Toast message={toast} tone={toastTone} onClose={clearToast} />
     </div>
   );
 }

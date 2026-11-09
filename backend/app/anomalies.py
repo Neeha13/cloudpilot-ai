@@ -293,7 +293,7 @@ def apply_action(anomaly: dict, action: str, resolution: Optional[str] = None, n
     return db.record_anomaly_event(
         anomaly_id=anomaly["id"], action=action, from_status=cur, to_status=to_status,
         reason=resolution if action == "resolve" else None, note=(note or "").strip() or None,
-        detector_version=DETECTOR_VERSION, dataset_id=anomaly["dataset_id"],
+        detector_version=DETECTOR_VERSION, dataset_id=anomaly["dataset_id"], snapshot_id=anomaly.get("snapshot_id"),
     )
 
 

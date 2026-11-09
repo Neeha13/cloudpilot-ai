@@ -11,7 +11,7 @@ AI-assisted cloud cost intelligence and optimization platform. This is an indepe
 - Decision analytics (coverage, acceptance rate, dismissal reasons, savings by stage)
 - Anomaly Detection v2: median baselines with robust z-scores; spike, gradual-growth and new-service types; severity; walk-forward history; acknowledge/investigate/resolve lifecycle; investigation panel (see [docs/decisions/002-anomaly-detection-v2.md](docs/decisions/002-anomaly-detection-v2.md))
 - Copilot Q&A returning structured, sourced answer cards built from the engine
-- One consistent dataset snapshot (`dataset_id`) shared by every API
+- Data integrity (Sprint 1): the dataset is persisted in SQLite as versioned snapshots. Every API reads one snapshot per request; refresh is controlled, validated and atomic; refresh history and data freshness are visible in the header (see [docs/decisions/003-data-integrity-snapshots.md](docs/decisions/003-data-integrity-snapshots.md))
 - API tests and product documentation
 
 ## Stack
@@ -65,7 +65,14 @@ Open http://localhost:3000
 | `GET /api/anomalies/{id}` | Investigation detail: timeline, attribution, related recommendations, history |
 | `POST /api/anomalies/{id}/actions` | `{action, resolution?, note?}`; 409 on an invalid transition |
 | `GET /api/anomalies/config` | Detection thresholds and resolution options |
-| `GET /api/dataset` | Dataset snapshot metadata (ID, scenario, billing period) |
+| `GET /api/dataset` | Active snapshot metadata: `snapshot_id`, `dataset_id`, billing period, freshness, last refresh |
+| `POST /api/dataset/refresh` | Optional `{reference_date?, seed?}`. `created` / `unchanged`; 409 while another refresh runs; 500 on failure (previous snapshot stays active) |
+| `GET /api/dataset/snapshots` | All snapshots, newest first, with the active one |
+| `GET /api/dataset/snapshots/{snapshot_id}` | Metadata of one (possibly superseded) snapshot |
+| `GET /api/dataset/refresh-history` | Refresh runs: trigger, status, error, snapshot produced |
+| `GET /api/dataset/migrations` | Applied schema migrations and their backup files |
+
+Every data endpoint (`/api/dashboard`, `/api/spend`, `/api/resources`, recommendations, anomalies, `/api/copilot`) accepts `?snapshot_id=` to read a specific snapshot, and returns `X-Snapshot-Id` / `X-Dataset-Id` headers.
 
 ## Tests
 
@@ -74,6 +81,10 @@ cd backend
 source .venv/bin/activate
 pytest
 ```
+
+## Database migrations and backups
+
+Schema changes are additive, versioned migrations recorded in `schema_migrations` and applied on startup. Before migrating a database that already holds data, the API writes a verified copy to `backend/backups/` (SQLite online backup + integrity check). Databases and backups are git-ignored.
 
 ## Important limitations
 

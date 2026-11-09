@@ -91,6 +91,7 @@ def apply_action(rec: dict, action: str, reason: Optional[str] = None,
         reason=reason if action == "dismiss" else None, note=(note or "").strip() or None,
         snooze_until=snooze_until, ruleset_version=RULESET_VERSION,
         dataset_id=rec.get("dataset_id"), estimated_monthly_savings=rec["savings"]["monthly"],
+        snapshot_id=rec.get("snapshot_id"),
     )
 
 
